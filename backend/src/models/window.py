@@ -1,4 +1,4 @@
-from sqlalchemy import Text,JSON,ForeignKey,Double,UniqueConstraint
+from sqlalchemy import Text,JSON,ForeignKey,Double,UniqueConstraint,Integer
 from sqlalchemy.orm import Mapped,mapped_column
 from ..config.database import Base
 from ..utils.clock import now
@@ -11,3 +11,5 @@ class ClimateWindow(Base):
     split:Mapped[str]
     values:Mapped[dict]=mapped_column(JSON)
     note:Mapped[str]=mapped_column(Text)
+    source_version:Mapped[int]=mapped_column(Integer,default=0,server_default="0")
+    last_batch_id:Mapped[int|None]=mapped_column(Integer,nullable=True)

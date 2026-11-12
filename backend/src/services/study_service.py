@@ -1,13 +1,17 @@
 from fastapi import HTTPException
 from ..models import ArchiveStudy,ClimateWindow,FeatureSpec
 from ..utils.serialize import record
+from ..config.database import study_lock
 from .analysis_service import prepare_snapshot
 
 def get_study(db,sid):
     row=db.get(ArchiveStudy,sid)
     if not row:raise HTTPException(404,"研究不存在")
     return row
-def create_snapshot(db,study):return {"study":record(study),"features":[record(f) for f in db.query(FeatureSpec).filter_by(study_id=study.id).order_by(FeatureSpec.position)],"windows":[record(w) for w in db.query(ClimateWindow).filter_by(study_id=study.id).order_by(ClimateWindow.code)]}
+def create_snapshot(db,study):
+    # 与勘误导入共用研究级锁：快照只能读到完整的一批，读不到半批
+    with study_lock(db,study.id):
+        return {"study":record(study),"features":[record(f) for f in db.query(FeatureSpec).filter_by(study_id=study.id).order_by(FeatureSpec.position)],"windows":[record(w) for w in db.query(ClimateWindow).filter_by(study_id=study.id).order_by(ClimateWindow.code)]}
 def list_studies(db):
     out=[]
     for s in db.query(ArchiveStudy).order_by(ArchiveStudy.code):

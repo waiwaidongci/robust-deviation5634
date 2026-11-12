@@ -36,7 +36,20 @@ JWT角色真实在后端执行，阅读者写操作403、研究员审批403、�
 
 ## 六页与五实体
 
-联合量总览、来源与严格拆分、稳健拟合配置、偏离与校准证据、人工补测审阅、过程留痕。`ArchiveStudy / ClimateWindow / FeatureSpec / DeviationRun / ReviewNote` 均贯穿表、model、schema、service、route、前端API、store及页面/组件；另有User/Audit。来源数值/角色/特征只读核对，窗口批注可写，历史运行使用冻结快照。
+联合量总览、来源与严格拆分、稳健拟合配置、偏离与校准证据、人工补测审阅、过程留痕。`ArchiveStudy / ClimateWindow / FeatureSpec / DeviationRun / ReviewNote` 均贯穿表、model、schema、service、route、前端API、store及页面/组件；另有User/Audit与`WindowErrataBatch`。来源数值/角色/特征只读核对，窗口批注可写，历史运行使用冻结快照。每个窗口带`source_version`与`last_batch_id`，记录当前来源版本与最近一次受理批次。
+
+## 批次勘误与快照隔离
+
+库房按批次补发窗口勘误，在「来源与严格拆分」页（02）以JSON整批导入（`POST /studies/{sid}/errata`，研究员/负责人权限，阅读者只读）。语义如下：
+
+- **按来源版本取新值**：同一窗口仅当勘误`source_version`更高时整体替换四量，并把窗口版本提升到该值、记录`last_batch_id`。
+- **旧批次回放不回退**：版本不新的条目跳过（skipped），现值与现版本保持不变；同版同值为幂等回放，同样跳过。
+- **冲突整批拒绝**：同版异值、角色（train/cal/test）变化、窗口不属于该研究、四量缺失/增减、NaN/Inf/布尔/复数或绝对值>1e9等坏数据，任一条出现即整批拒绝，不留下半批；拒绝批次同样落一条`rejected`记录并在来源页展示原因。
+- **批次号唯一**：同一研究内`batch_no`唯一，重复导入返回409；乱序到达按各窗口版本单调收敛，迟到旧批不会回退。
+- **快照隔离**：导入与`create_snapshot`共用研究级锁（PostgreSQL `pg_advisory_xact_lock`，SQLite为进程内互斥）。并发导入彼此排队，且研究创建快照时读不到半批——要么读到整批前、要么读到整批后。
+- **历史保持原样**：勘误只改当前来源表；已完成研究的冻结`input_snapshot`、获批补测及其CSV下载内容不受影响（下载取自运行快照，不回查来源表）。导入与拒绝分别写`errata.import`/`errata.reject`审计。
+
+批处理为全量先校验、再单事务提交；`backend/migrations/002_window_errata.sql`为既有Postgres库补列与建表（首次schema仍由SQLAlchemy metadata建立）。
 
 seed三研究各450条，共1350窗口、12个特征定义。每研究固定train200/cal150/test100，窗口编号是稳定身份而非连续时间序列。SL-01四量联合Gaussian主群；SL-02只在train前20条加入极端值，cal/test仍来自同一独立主群；SL-03第四量为前两量线性组合，训练秩亏。种子260/261/262、固定生成R与尺度写在seed脚本，不是实测数据。自然键为email、study code、(study,window code)、(study,feature code/position)、基线运行name；重复seed只补缺失，不覆盖用户批注或已批准建议。`SEED_DEMO=true`启动自动执行，失败只记日志，独立seed命令仍可运行。
 
@@ -80,8 +93,8 @@ npm ci
 npm run dev
 ```
 
-`backend/src/{routes,controllers,services,models,schemas,middlewares,utils,constants,config}` 按来源、MCD、conformal、运行与审阅职责拆分；`backend/scripts/seed_demo.py`；migration为可选索引升级，首次schema由SQLAlchemy metadata建立，非独立全量DDL。`frontend/src/{api,stores,types,components/common,hooks,pages,router,utils,constants}` 为React应用。
+`backend/src/{routes,controllers,services,models,schemas,middlewares,utils,constants,config}` 按来源、MCD、conformal、运行与审阅职责拆分；`backend/scripts/seed_demo.py`；migration为可选索引/勘误升级，首次schema由SQLAlchemy metadata建立，非独立全量DDL。`backend/tests/`为pytest用例（`pytest`），覆盖勘误的重复/乱序/同版异值/角色变化/坏数据整批拒绝/不回退及多线程并发快照隔离，与HTTP鉴权校验。`frontend/src/{api,stores,types,components/common,hooks,pages,router,utils,constants}` 为React应用。
 
 .env参数：COMPOSE_PROJECT_NAME、FRONTEND_PORT、BACKEND_PORT、DB_PORT、JWT_SECRET、SEED_DEMO；DATABASE_URL/REDIS_URL由Compose定义。角色枚举在backend/constants/roles与frontend/constants/enums，参与路由鉴权和页面角色显示；运行枚举backend/constants/status与同一前端enums参与worker/StatusBadge；审阅Literal位于backend/schemas/note并在model/service与前端ReviewStatus使用；split Literal位于backend/schemas/window，分析校验与前端SplitRoles保持train/cal/test。
 
-测试脚本、关键JSON/CSV、截图及已知差异在同批 `test-artifacts/gb-0026/TESTING.md`。本项目为单worker研究工具，无来源上传、任务崩溃恢复、多worker去重、真实设备或自动告警。清理仅本题：`docker compose down -v --remove-orphans`。MIT License。
+测试脚本、关键JSON/CSV、截图及已知差异在同批 `test-artifacts/gb-0026/TESTING.md`。本项目为单worker研究工具，来源仅支持批次窗口勘误（见上节，非任意文件上传），无任务崩溃恢复、多worker去重、真实设备或自动告警。清理仅本题：`docker compose down -v --remove-orphans`。MIT License。
